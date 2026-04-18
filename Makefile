@@ -1,5 +1,5 @@
 KPM_NAME := nuke_ext4_sysfs
-KPM_VERSION ?= 0.2.0
+KPM_VERSION ?= 0.2.1
 KPM_OUT := out/$(KPM_NAME)_$(KPM_VERSION).kpm
 
 ifdef HYBRID_MOUNT_KP_DIR
