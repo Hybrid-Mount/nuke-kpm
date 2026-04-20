@@ -2,6 +2,7 @@
 // nuke_ext4_sysfs KPM for APatch/KernelPatch.
 
 #include <linux/errno.h>
+#include <linux/dcache.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
@@ -21,38 +22,18 @@ struct vfsmount;
 struct dentry;
 struct proc_dir_entry;
 
+/*
+ * KernelPatch currently ships the VFS types we need via fs.h, but not the
+ * tiny linux/path.h wrapper that defines struct path.
+ */
 struct path {
     struct vfsmount *mnt;
     struct dentry *dentry;
 };
 
-/*
- * KernelPatch ships a compact filesystem header set, so we define the minimal
- * layout we need here instead of depending on absent kernel headers such as
- * linux/namei.h or linux/path.h.
- */
-struct file_system_type {
-    const char *name;
-};
-
-struct super_block {
-    struct file_system_type *s_type;
-    char s_id[32];
-};
-
-struct inode {
-    umode_t i_mode;
-    unsigned short i_opflags;
-    kuid_t i_uid;
-    kgid_t i_gid;
-    unsigned int i_flags;
-    const void *i_op;
-    struct super_block *i_sb;
-};
-
-struct dentry {
-    struct inode *d_inode;
-};
+#ifndef d_inode
+#define d_inode(dentry) ((dentry)->d_inode)
+#endif
 
 typedef void (*ext4_unregister_sysfs_t)(struct super_block *sb);
 typedef int (*kern_path_t)(const char *name, unsigned int flags, struct path *path);
@@ -107,7 +88,9 @@ static long resolve_ext4_unregister_sysfs(void) {
 
 static long do_nuke_ext4_sysfs(const char *path) {
     struct path resolved_path;
+    struct inode *inode;
     struct super_block *sb;
+    struct file_system_type *fs_type;
     char procfs_path[96];
     char proc_subtree[96];
     char sb_id[32];
@@ -130,21 +113,23 @@ static long do_nuke_ext4_sysfs(const char *path) {
         return err;
     }
 
-    sb = resolved_path.dentry->d_inode->i_sb;
-    if (!sb || !sb->s_type || !sb->s_type->name) {
+    inode = resolved_path.dentry ? d_inode(resolved_path.dentry) : NULL;
+    sb = inode ? inode->i_sb : NULL;
+    fs_type = sb ? sb->s_type : NULL;
+    if (!sb || !fs_type || !fs_type->name) {
         pr_err("[hm-kpm] invalid super block for path=%s\n", path);
         path_put_ptr(&resolved_path);
         return -EINVAL;
     }
 
-    if (strcmp(sb->s_type->name, "ext4") != 0) {
+    if (strcmp(fs_type->name, "ext4") != 0) {
         pr_err("[hm-kpm] target is not ext4: path=%s fs=%s\n", path,
-               sb->s_type->name);
+               fs_type->name);
         path_put_ptr(&resolved_path);
         return -EOPNOTSUPP;
     }
 
-    snprintf(sb_id, sizeof(sb_id), "%s", sb->s_id);
+    scnprintf(sb_id, sizeof(sb_id), "%.*s", (int)sizeof(sb->s_id), sb->s_id);
     snprintf(procfs_path, sizeof(procfs_path), "/proc/fs/ext4/%s", sb_id);
     snprintf(proc_subtree, sizeof(proc_subtree), "fs/ext4/%s", sb_id);
     pr_info("[hm-kpm] unregistering ext4 sysfs node: sb=%s proc=%s\n", sb_id,
